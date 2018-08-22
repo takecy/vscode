@@ -13,7 +13,7 @@ import { ExtHostExtensionService } from 'vs/workbench/api/node/extHostExtensionS
 import { ExtHostConfiguration } from 'vs/workbench/api/node/extHostConfiguration';
 import { ExtHostWorkspace } from 'vs/workbench/api/node/extHostWorkspace';
 import { IExtensionDescription } from 'vs/workbench/services/extensions/common/extensions';
-import { QueryType, ISearchQuery } from 'vs/platform/search/common/search';
+import { QueryType, ISearchQuery, ISearchComplete } from 'vs/platform/search/common/search';
 import { DiskSearch } from 'vs/workbench/services/search/node/searchService';
 import { IInitData, IEnvironment, IWorkspaceData, MainContext } from 'vs/workbench/api/node/extHost.protocol';
 import * as errors from 'vs/base/common/errors';
@@ -75,6 +75,8 @@ interface ITestRunner {
 }
 
 export class ExtensionHostMain {
+
+	private static readonly WORKSPACE_CONTAINS_TIMEOUT = 5000;
 
 	private _isTerminating: boolean = false;
 	private _diskSearch: DiskSearch;
@@ -259,7 +261,7 @@ export class ExtensionHostMain {
 		}
 
 		if (!this._diskSearch) {
-			// Shut down this search process after 1s
+			// Shut down this search process after 1s of inactivity
 			this._diskSearch = new DiskSearch(false, 1000);
 		}
 
@@ -282,7 +284,22 @@ export class ExtensionHostMain {
 			ignoreSymlinks: !followSymlinks
 		};
 
-		const result = await this._diskSearch.search(query);
+		const searchP = this._diskSearch.search(query);
+		const timer = setTimeout(() => {
+			searchP.cancel();
+		}, ExtensionHostMain.WORKSPACE_CONTAINS_TIMEOUT);
+
+		let result: ISearchComplete;
+		try {
+			result = await searchP;
+			clearTimeout(timer);
+		} catch (e) {
+			return (
+				this._extensionService.activateById(extensionId, new ExtensionActivatedByEvent(true, `workspaceContainsTimeout`))
+					.done(null, err => console.error(err))
+			);
+		}
+
 		if (result.limitHit) {
 			// a file was found matching one of the glob patterns
 			return (
